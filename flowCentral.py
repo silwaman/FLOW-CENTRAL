@@ -644,7 +644,7 @@ def buffer_sortation(driver, fc):
     primeira_tabela = tabelas[0]
     return primeira_tabela
 
-
+# ============================================     BUFFERS AUTOFLOW REBIN      ====================================================================================================================================
 
 # =======================================================================
 # puxando buffers de rebin MZ do autoflow
@@ -676,6 +676,11 @@ if fc in fcs_autoflow_MZ:
                 return None
             
         
+# =======================================================================
+# puxando buffers de rebin MS do autoflow
+# ======================================================================
+
+       
 # =======================================================================
 # puxando buffers de rebin MS do autoflow
 # ======================================================================
@@ -731,8 +736,146 @@ elif fc in fcs_autoflow_MS  and fc == "GIG1":
                 return None
 
 
-import streamlit as st
-import pandas as pd
+# ============================================ PUXANDO BUFFERS PACK AUTOFLOW  COM FLOW TRACKER O MIN E MAX DE CADA PLANO =================================================================================================
+# ============================================
+# PUXANDO BUFFERS PACK AUTOFLOW + FLOW TRACKER
+# ============================================
+class buffers_pack:
+    def __init__(self, navegador, fc):
+        self.navegador = navegador
+        self.fc = fc
+
+    def buffers_pack(self):
+        """Pack atual (Sorted) no Rodeo"""
+        try:
+            url = (
+                f'https://rodeo-iad.amazon.com/{self.fc}/ExSD?yAxis=WORK_POOL&zAxis=NONE&shipmentTypes=ALL&'
+                'exSDRange.quickRange=NEXT_3_DAYS&exSDRange.dailyStart=00%3A00&exSDRange.dailyEnd=00%3A00&'
+                'giftOption=ALL&fulfillmentServiceClass=ALL&fracs=NON_FRACS&isEulerExSDMiss=ALL&isEulerPromiseMiss=ALL&'
+                'isEulerUpgraded=ALL&isReactiveTransfer=ALL&workPool=PredictedCharge&workPool=PlannedShipment&_workPool=on&'
+                'workPool=ReadyToPick&workPool=ReadyToPickHardCapped&workPool=ReadyToPickUnconstrained&'
+                'workPool=PickingNotYetPicked&workPool=PickingNotYetPickedPrioritized&workPool=PickingNotYetPickedNotPrioritized&'
+                'workPool=PickingNotYetPickedHardCapped&workPool=CrossdockNotYetPicked&_workPool=on&workPool=PickingPicked&'
+                'workPool=PickingPickedInProgress&workPool=PickingPickedInTransit&workPool=PickingPickedRouting&'
+                'workPool=PickingPickedAtDestination&workPool=Inducted&workPool=RebinBuffered&workPool=Sorted&workPool=GiftWrap&'
+                'workPool=Packing&workPool=Scanned&workPool=ProblemSolving&workPool=ProcessPartial&workPool=SoftwareException&'
+                'workPool=Crossdock&workPool=PreSort&workPool=TransshipSorted&workPool=Palletized&_workPool=on&'
+                'workPool=ManifestPending&workPool=ManifestPendingVerification&workPool=Manifested&workPool=Loaded&'
+                'workPool=TransshipManifested&_workPool=on&processPath=&minPickPriority=MIN_PRIORITY&shipMethod=&shipOption=&sortCode=&fnSku='
+            )
+            self.navegador.get(url)
+            time.sleep(5)
+            elem = WebDriverWait(self.navegador, 15).until(
+                EC.presence_of_element_located((By.XPATH, "//th[normalize-space()='Sorted']/following-sibling::td[1]"))
+            )
+            txt = elem.text.strip().replace(",", "")
+            return int(txt) if txt.replace(".", "").isdigit() else None
+        except Exception as e:
+            print(f"Erro ao extrair pack atual: {e}")
+            return None
+
+    def min_max_pack(self):
+        """Limites mínimos/máximos de Pack no Flow Tracker (por FC)"""
+        try:
+            if self.fc == "GRU5":
+                url = f'https://outboundflow-iad.amazon.com/GRU5/buffer_size_limits'
+                self.navegador.get(url)
+                time.sleep(5)
+                pack_min = self.navegador.find_element(By.XPATH, '//*[@id="processPathToBufferSizeLimitsPPMultiZonePACK.minimumSize.quantity"]')
+                pack_max = self.navegador.find_element(By.XPATH, '//*[@id="processPathToBufferSizeLimitsPPMultiZonePACK.maximumSize.quantity"]')
+
+            elif self.fc in ("GIG1", "GRU9"):
+                url = f'https://outboundflow-iad.amazon.com/{self.fc}/buffer_size_limits'
+                self.navegador.get(url)
+                time.sleep(5)
+                pack_min = self.navegador.find_element(By.XPATH, '//*[@id="processPathToBufferSizeLimitsPPMultiSmallPACK.minimumSize.quantity"]')
+                pack_max = self.navegador.find_element(By.XPATH, '//*[@id="processPathToBufferSizeLimitsPPMultiSmallPACK.maximumSize.quantity"]')
+            else:
+                return None
+
+            return {
+                "pack_min": pack_min.get_attribute('value'),
+                "pack_max": pack_max.get_attribute('value')
+            }
+        except Exception as e:
+            print(f"Erro ao extrair min/max de pack: {e}")
+            return None
+
+    def _to_float(self, v):
+        """Converte '1.234,5' ou '1234.5' -> float"""
+        s = str(v).strip()
+        # remove separador de milhar e normaliza decimal
+        s = s.replace(".", "").replace(",", ".")
+        try:
+            return float(s)
+        except:
+            return 0.0
+
+    def calcular_planejado(self, pack_atual, pack_min, pack_max, hc=None):
+        """
+        Calcula os limites planejados (usando HC). Mantida a fórmula:
+        planejado_min = HC * pack_min
+        planejado_max = HC * pack_max
+        """
+        if self.fc == "GRU5":
+            try:
+                    # Se HC não vier, busca no Autoflow
+                    if hc is None:
+                        url = f'https://autoflow-cascade-na.amazon.com/{self.fc}/dashboard'
+                        self.navegador.get(url)
+                    time.sleep(5)
+                    hc_value = self.navegador.find_element(
+                        By.XPATH,
+                        "//td[normalize-space()='PACK:PPMultiZone']/following-sibling::td[2]"
+                    ).text
+
+                    hc = self._to_float(hc_value)
+
+                    pack_atual_f = self._to_float(pack_atual)
+                    pack_min_f   = self._to_float(pack_min)
+                    pack_max_f   = self._to_float(pack_max)
+
+                    planejado_min = hc * pack_min_f
+                    planejado_max = hc * pack_max_f
+
+                    return {
+                        "pack_atual": pack_atual_f,
+                        "planejado_min": planejado_min,
+                        "planejado_max": planejado_max
+                    }
+            except Exception as e:
+                print(f"Erro ao calcular o planejado: {e}")
+            return None
+        elif self.fc in ("GIG1", "GRU9"):
+            try:
+                # Se HC não vier, busca no Autoflow
+                if hc is None:
+                    url = f'https://autoflow-cascade-na.amazon.com/{self.fc}/dashboard'
+                    self.navegador.get(url)
+                time.sleep(5)
+                hc_value = self.navegador.find_element(
+                    By.XPATH,
+                    "//td[normalize-space()='PACK:PPMultiSmall']/following-sibling::td[2]"
+                ).text
+
+                hc = self._to_float(hc_value)
+
+                pack_atual_f = self._to_float(pack_atual)
+                pack_min_f   = self._to_float(pack_min)
+                pack_max_f   = self._to_float(pack_max)
+
+                planejado_min = hc * pack_min_f
+                planejado_max = hc * pack_max_f
+
+                return {
+                    "pack_atual": pack_atual_f,
+                    "planejado_min": planejado_min,
+                    "planejado_max": planejado_max
+                }
+            except Exception as e:
+                print(f"Erro ao calcular o planejado: {e}")
+            return None
+
 
 # ============= Sidebar Login =============
 st.sidebar.title("🔐 Credenciais de Acesso")
@@ -801,10 +944,58 @@ if st.sidebar.button("➡️ Entrar"):
                 st.warning("⚠️ Não foi possível extrair o buffer TW.")
             st.divider()
 
-            # ===========================
+         
+           
+
+#===================== BUFFER DE PACK ========================================================================
+            # Instância
+            st.subheader("📊 Buffer PACK - Autoflow")
+            buffers = buffers_pack(driver, fc)
+
+            # Min/Max do Flow Tracker
+            min_max_values = buffers.min_max_pack()
+            if min_max_values:
+                try:
+                    # Se preferir, pode deixar a classe converter; mas isto aqui já ajuda:
+                    pack_min = min_max_values["pack_min"]
+                    pack_max = min_max_values["pack_max"]
+
+                    # Pack atual (Rodeo)
+                    pack_atual = buffers.buffers_pack()
+
+                    # Calcula planejado (usa HC interno)
+                    x = buffers.calcular_planejado(
+                        pack_atual=pack_atual,
+                        pack_min=pack_min,
+                        pack_max=pack_max
+                    )
+
+                    if x:
+                        st.write(f"📊 **Pack Atual:** {x['pack_atual']:.0f}")
+                        st.write(f"🔄 **Planejado (mín):** {x['planejado_min']:.0f}")
+                        st.write(f"🔄 **Planejado (máx):** {x['planejado_max']:.0f}")
+
+                        # Validação: dentro/fora do planejado
+                        if x['pack_atual'] < x['planejado_min']:
+                            delta = ((x['pack_atual'] / x['planejado_min']) * 100) - 100
+                            st.warning(f"⬇️ {abs(delta):.1f}% abaixo do **mínimo planejado**.")
+                        elif x['pack_atual'] > x['planejado_max']:
+                            delta = ((x['pack_atual'] / x['planejado_max']) * 100) - 100
+                            st.warning(f"⬆️ {delta:.1f}% acima do **máximo planejado**.")
+                        else:
+                            st.success("✅ O pack atual está **dentro** dos limites planejados.")
+                    else:
+                        st.warning("❌ Não foi possível calcular o planejado.")
+                except Exception as e:
+                    st.error(f"Erro no cálculo do pack planejado: {e}")
+            else:
+
+            
+                st.warning("❌ Não foi possível obter min/max de pack no Flow Tracker.")
+
+             # ===========================
             # 📊 Buffer Rebin Autoflow
             # ===========================
-            st.subheader("📊 Buffer Rebin - Autoflow")
 
             def exibir_buffer(tipo, buffers):
                 atual = float(buffers[f"{tipo}_atual"].replace('%', '').strip())
@@ -821,7 +1012,6 @@ if st.sidebar.button("➡️ Entrar"):
                     st.warning(f"⬆️ Está **{int(((atual / maximo) * 100) - 100)}% acima do máximo!**")
                 else:
                     st.success("✅ Dentro dos limites aceitáveis.")
-
             try:
                 if fc in fcs_autoflow_MZ:
                     buffers = buffers_MZ(driver, fc)
@@ -839,7 +1029,8 @@ if st.sidebar.button("➡️ Entrar"):
             except:
                 st.error("Erro ao carregar dados dos buffers.")
             st.divider()
-
+            
+            st.subheader("📊 Buffer Rebin - Autoflow")
             try:
                     trb = TRB()
                     df_singles, df_multis = puxar_trb(driver, fc, trb)
