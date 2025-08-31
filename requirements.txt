@@ -1,0 +1,8 @@
+streamlit
+selenium
+pandas
+numpy
+webdriver-manager
+datetime
+zoneinfo
+chrome-driver
